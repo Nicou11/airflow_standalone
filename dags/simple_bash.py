@@ -19,7 +19,7 @@ with DAG(
     },
     description='hello world',
    # schedule_interval=timedelta(days=1),
-    schedule="10 4 * * *",
+    schedule="0 4 * * *",
     start_date=datetime(2024, 7, 10),
     catchup=True,
     tags=['simple', 'bash', 'etl', 'shop'],
@@ -46,7 +46,7 @@ with DAG(
         task_id="copy.log",
         bash_command="""
              mkdir -p ~/data/{{ds_nodash}}
-             cp ~/history_{{ds_nodash}}*.log ~/data/{{ds_nodash}}
+             cp ~/historysave/history_{{ds_nodash}}*.log ~/data/{{ds_nodash}}
         """
     )
 
