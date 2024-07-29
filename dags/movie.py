@@ -59,13 +59,16 @@ with DAG(
         print(df.head(5))
 
     run_this = PythonOperator(
-            task_id="print_the_context",
-            python_callable=print_context)
+        task_id='print_the_context',
+        python_callable=print_context,
+    )
 
 
-    get_data = PythonOperator(
-        task_id='get.data',
-        python_callable=get_data
+    get_data = PythonVirtualenvOperator(
+            task_id="get_data",
+            python_callable=get_data,
+            requirements=["git+http://github.com/Nicou11/movie.git@0.2/api"],
+            system_site_packages=False,
     )
 
     save_data = BashOperator(
