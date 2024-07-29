@@ -14,6 +14,8 @@ from airflow.operators.python import (
     PythonVirtualenvOperator,
     is_venv_installed,
 )
+from mov.api.call import gen_url, req, get_key, req2list, list2df, save2df
+
 
 with DAG(
     'movie',
@@ -50,7 +52,6 @@ with DAG(
         print(f"ds_nodash => {kwargs['ds_nodash']}")
         print(f"kwagrs type => {type(kwargs)}")
         print("*" * 20)
-        from mov.api.call import get_key, save2df
         key = get_key()
         print(f"MOVIE_API_KEY => {key}")
         YYYYMMDD = kwargs['ds_nodash']
