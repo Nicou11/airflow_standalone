@@ -13,9 +13,9 @@ from airflow.operators.python import (
     PythonOperator,
     PythonVirtualenvOperator,
     is_venv_installed,
+    BranchPythonOperator
 )
-from mov.api.call import gen_url, req, get_key, req2list, list2df, save2df
-
+import os
 
 with DAG(
     'movie',
@@ -24,7 +24,7 @@ with DAG(
     default_args={
         'depends_on_past': False,
         'retries': 1,
-        'retry_delay': timedelta(minutes=5)
+        'retry_delay': timedelta(seconds=3)
     },
     description='movie_db',
    # schedule_interval=timedelta(days=1),
@@ -34,61 +34,92 @@ with DAG(
     tags=['movie', 'movie_db'],
 ) as dag:
 
-    def print_context(ds, **kwargs):
-        """Print the Airflow context and ds variable from the context."""
-        print("::group::All kwargs")
-        pprint(kwargs)
-        print(kwargs)
-        print("::endgroup::")
-        print("::group::Context variable ds")
-        print(ds)
-        print("::endgroup::")
-        return "Whatever you return gets printed in the logs"
+    def branch_fun(ds_nodash):
+        import os
+        home_dir = os.path.expanduser("~")
+        path = os.path.join(home_dir, f"tmp/test_parquet/load_dt={ds_nodash}")
+        if os.path.exists(path):
+            return rm_dir.task_id
+        else:
+            return "get.data", "echo.task"
 
-    def get_data(ds, **kwargs):
-        print(ds)
-        print(kwargs)
-        print("*" * 20)
-        print(f"ds_nodash => {kwargs['ds_nodash']}")
-        print(f"kwagrs type => {type(kwargs)}")
-        print("*" * 20)
-        key = get_key()
-        print(f"MOVIE_API_KEY => {key}")
-        YYYYMMDD = kwargs['ds_nodash']
-        df = save2df(YYYYMMDD)
+    def get_data(ds_nodash):
+        from mov.api.call import save2df
+        df = save2df(ds_nodash)
         print(df.head(5))
+        
+#    def branch_fun(**kwargs):
+#	    ld = kwargs['ds_nodash']
+#        if os.path.exists(f'~/tmp/test_parquet/load_dt={ld}'):
+#            return rm_dir
+#        else:
+#            return get_data
+    def save_data(ds_nodash):
+        from mov.api.call import apply_type2df
+        
+        df = apply_type2df(load_dt=ds_nodash)
+        print(df.head(10))
+        print(df.dtypes)
+        
+        # 개봉일 기준 그룹핑 누적 관객수 합
+        g = df.groupby('openDt')
+        sum_df = g.agg({'audiCnt': 'sum'}).reset_index()
+        print(sum_df)
 
-    run_this = PythonOperator(
-        task_id='print_the_context',
-        python_callable=print_context,
-    )
+
+    branch_op = BranchPythonOperator(
+	    task_id="branch.op",
+    	python_callable=branch_fun
+    ) 
 
 
     get_data = PythonVirtualenvOperator(
-            task_id="get_data",
-            python_callable=get_data,
-            requirements=["git+http://github.com/Nicou11/movie.git@0.2/api"],
-            system_site_packages=False,
+        task_id="get.data",
+        python_callable=get_data,
+        system_site_packages=False,
+        trigger_rule="all_done",
+        requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
+        venv_cache_path="/home/young12/tmp2/air_venv/get_data"
+    )
+    
+    save_data = PythonVirtualenvOperator(
+        task_id="save.data",
+        python_callable=save_data,
+        system_site_packages=False,
+        trigger_rule="one_success",
+        requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
+        venv_cache_path="/home/young12/tmp2/air_venv/get_data"
     )
 
-    save_data = BashOperator(
-        task_id='save.data',
-        bash_command="""
-            echo "save data"
-            """
+    rm_dir = BashOperator(
+	    task_id='rm.dir',
+	    bash_command='rm -rf ~/tmp/test_parquet/load_dt={{ ds_nodash }}'
     )
 
-        #bash_command="""
-        #    echo "err report"
-        #""",
-        #trigger_rule="one_failed"
-
+    echo_task = BashOperator(
+            task_id='echo.task',
+            bash_command="echo 'task'"
+    )
 
     end  = EmptyOperator(task_id='end', trigger_rule="all_done")
     start  = EmptyOperator(task_id='start')
 
-    start >> get_data >> save_data >> end
-    start >> run_this >> end
+    join_task  = BashOperator(
+            task_id='join',
+            bash_command="exit 1",
+            trigger_rule="all_done"
+    )
+    
+    start >> branch_op
+    start >> join_task
+
+    branch_op >> rm_dir >> get_data
+    branch_op >> echo_task >> save_data
+    branch_op >> get_data
+    
+    join_task >> save_data
+
+    get_data >> save_data >> end
 
 
 
