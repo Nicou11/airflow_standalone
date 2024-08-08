@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta
 from textwrap import dedent
+from pprint import pprint
 
 # The DAG object; we'll need this to instantiate a DAG
 from airflow import DAG
@@ -7,6 +8,14 @@ from airflow import DAG
 # Operators; we need this to operate!
 from airflow.operators.bash import BashOperator
 from airflow.operators.empty import EmptyOperator
+from airflow.operators.python import (
+    ExternalPythonOperator,
+    PythonOperator,
+    PythonVirtualenvOperator,
+    is_venv_installed,
+    BranchPythonOperator
+)
+import os
 
 with DAG(
     'movie',
@@ -20,62 +29,97 @@ with DAG(
     description='movie_db',
    # schedule_interval=timedelta(days=1),
     schedule="0 4 * * *",
-    start_date=datetime(2024, 7, 22),
+    start_date=datetime(2024, 7, 24),
     catchup=True,
     tags=['movie', 'movie_db'],
 ) as dag:
 
-    task_get = BashOperator(
-        task_id='get.data',
-        bash_command="""
-            echo "get data" 
-    """
+    def branch_fun(ds_nodash):
+        import os
+        home_dir = os.path.expanduser("~")
+        path = os.path.join(home_dir, f"tmp/test_parquet/load_dt={ds_nodash}")
+        if os.path.exists(path):
+            return rm_dir.task_id
+        else:
+            return "get.data", "echo.task"
+
+    def get_data(ds_nodash):
+        from mov.api.call import save2df
+        df = save2df(ds_nodash)
+        print(df.head(5))
+        
+#    def branch_fun(**kwargs):
+#	    ld = kwargs['ds_nodash']
+#        if os.path.exists(f'~/tmp/test_parquet/load_dt={ld}'):
+#            return rm_dir
+#        else:
+#            return get_data
+    def save_data(ds_nodash):
+        from mov.api.call import apply_type2df
+        
+        df = apply_type2df(load_dt=ds_nodash)
+        print(df.head(10))
+        print(df.dtypes)
+        
+        # 개봉일 기준 그룹핑 누적 관객수 합
+        g = df.groupby('openDt')
+        sum_df = g.agg({'audiCnt': 'sum'}).reset_index()
+        print(sum_df)
+
+
+    branch_op = BranchPythonOperator(
+	    task_id="branch.op",
+    	python_callable=branch_fun
+    ) 
+
+
+    get_data = PythonVirtualenvOperator(
+        task_id="get.data",
+        python_callable=get_data,
+        system_site_packages=False,
+        trigger_rule="all_done",
+        requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
+        venv_cache_path="/home/young12/tmp2/air_venv/get_data"
+    )
+    
+    save_data = PythonVirtualenvOperator(
+        task_id="save.data",
+        python_callable=save_data,
+        system_site_packages=False,
+        trigger_rule="one_success",
+        requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
+        venv_cache_path="/home/young12/tmp2/air_venv/get_data"
     )
 
-    task_save = BashOperator(
-        task_id='save.data',
-        bash_command="""
-            echo "save data"
-            """
-      #  == awk '{print "{{ds}}, "$2", "$1}' ${CNT_PATH} > ${CSV_PATH}/csv.csv
+    rm_dir = BashOperator(
+	    task_id='rm.dir',
+	    bash_command='rm -rf ~/tmp/test_parquet/load_dt={{ ds_nodash }}'
     )
 
-    task_create_table = BashOperator(
-        task_id= "create.table",
-        bash_command="""
-        """
+    echo_task = BashOperator(
+            task_id='echo.task',
+            bash_command="echo 'task'"
     )
 
-    task_to_tmp = BashOperator(
-        task_id = "to.tmp",
-        bash_command="""
-        """
+    end  = EmptyOperator(task_id='end', trigger_rule="all_done")
+    start  = EmptyOperator(task_id='start')
+
+    join_task  = BashOperator(
+            task_id='join',
+            bash_command="exit 1",
+            trigger_rule="all_done"
     )
+    
+    start >> branch_op
+    start >> join_task
 
-    task_to_base = BashOperator(
-        task_id="to.base",
-        bash_command="""
-        """
-    )
+    branch_op >> rm_dir >> get_data
+    branch_op >> echo_task >> save_data
+    branch_op >> get_data
+    
+    join_task >> save_data
 
-    task_make_done = BashOperator(
-        task_id="make.done",
-        bash_command="""
-        """
-    )
-
-    task_err = BashOperator(
-        task_id="err.report",
-        bash_command="""
-            echo "err report"
-        """,
-        trigger_rule="one_failed"
-    )
-
-    task_end  = EmptyOperator(task_id='end', trigger_rule="all_done")
-    task_start  = EmptyOperator(task_id='start')
-
-    task_start >> task_get >> task_save >> task_end
+    get_data >> save_data >> end
 
 
 
