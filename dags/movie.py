@@ -26,9 +26,11 @@ with DAG(
         'retries': 1,
         'retry_delay': timedelta(seconds=3)
     },
+    max_active_runs=1,
+    max_active_tasks=3,
     description='movie_db',
    # schedule_interval=timedelta(days=1),
-    schedule="0 4 * * *",
+    schedule="10 2 * * *",
     start_date=datetime(2024, 7, 24),
     catchup=True,
     tags=['movie', 'movie_db'],
@@ -41,25 +43,34 @@ with DAG(
         if os.path.exists(path):
             return rm_dir.task_id
         else:
-            return "get.data", "echo.task"
+            return "get.start", "echo.task"
 
     def get_data(ds_nodash):
         from mov.api.call import save2df
         df = save2df(ds_nodash)
         print(df.head(5))
+
+    def fun_divide(ds_nodash, url_param):
+        from mov.api.call import save2df
+        df = save2df(load_dt=ds_nodash, url_param=url_param)
+        print(df[['movieCd', 'movieNm']].head(5))
         
+        for k, v in url_param.items():
+            df[k] = v
+
+        p_cols = ['load_dt'] + list(url_param.keys())
+        df.to_parquet('~/tmp/test_parquet', partition_cols=p_cols)
+
 #    def branch_fun(**kwargs):
 #	    ld = kwargs['ds_nodash']
 #        if os.path.exists(f'~/tmp/test_parquet/load_dt={ld}'):
 #            return rm_dir
 #        else:
 #            return get_data
+
     def save_data(ds_nodash):
         from mov.api.call import apply_type2df
-        
         df = apply_type2df(load_dt=ds_nodash)
-        print(df.head(10))
-        print(df.dtypes)
         
         # 개봉일 기준 그룹핑 누적 관객수 합
         g = df.groupby('openDt')
@@ -77,49 +88,87 @@ with DAG(
         task_id="get.data",
         python_callable=get_data,
         system_site_packages=False,
-        trigger_rule="all_done",
         requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
-        venv_cache_path="/home/young12/tmp2/air_venv/get_data"
+        #venv_cache_path="/home/young12/tmp2/air_venv/get_data"
     )
     
+
     save_data = PythonVirtualenvOperator(
         task_id="save.data",
         python_callable=save_data,
         system_site_packages=False,
         trigger_rule="one_success",
         requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
-        venv_cache_path="/home/young12/tmp2/air_venv/get_data"
+        #venv_cache_path="/home/young12/tmp2/air_venv/get_data"
     )
+
+
+    multi_y = PythonVirtualenvOperator(
+        task_id="multi_y",
+        python_callable=fun_divide,
+        system_site_packages=False,
+        requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
+        op_kwargs={ 'url_param': {"multiMovieYn": "Y"}}
+    )
+
+    
+    multi_n = PythonVirtualenvOperator(
+        task_id='multi.n',
+        python_callable=fun_divide,
+        system_site_packages=False,
+        requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
+        op_kwargs={ 'url_param': {"multiMovieYn": "N"}}
+    )
+
+    nation_k = PythonVirtualenvOperator(
+        task_id='nation.k',
+        python_callable=fun_divide,
+        system_site_packages=False,
+        requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
+        op_kwargs={ 'url_param': {"repNationCd": "K"}}
+    )
+
+    nation_f = PythonVirtualenvOperator(
+        task_id='nation.f',
+        python_callable=fun_divide,
+        system_site_packages=False,
+        requirements=["git+https://github.com/Nicou11/movie@0.3/api"],
+        op_kwargs={ 'url_param': {"repNationCd": "F"}}
+    )
+
 
     rm_dir = BashOperator(
 	    task_id='rm.dir',
 	    bash_command='rm -rf ~/tmp/test_parquet/load_dt={{ ds_nodash }}'
     )
 
+
     echo_task = BashOperator(
             task_id='echo.task',
             bash_command="echo 'task'"
     )
 
+
     end  = EmptyOperator(task_id='end', trigger_rule="all_done")
     start  = EmptyOperator(task_id='start')
 
-    join_task  = BashOperator(
-            task_id='join',
+    throw_err  = BashOperator(
+            task_id='throw.err',
             bash_command="exit 1",
             trigger_rule="all_done"
     )
     
+    get_start = EmptyOperator(task_id='get.start', trigger_rule="all_done")
+    get_end = EmptyOperator(task_id='get.end')
+
+
     start >> branch_op
-    start >> join_task
+    start >> throw_err >> save_data
 
-    branch_op >> rm_dir >> get_data
-    branch_op >> echo_task >> save_data
-    branch_op >> get_data
+    branch_op >> echo_task
+    branch_op >> rm_dir >> get_start
+    branch_op >> get_start
+    get_start >> [get_data, multi_y, multi_n, nation_k, nation_f] >> get_end
     
-    join_task >> save_data
-
-    get_data >> save_data >> end
-
-
-
+    get_end >> save_data >> end
+    
