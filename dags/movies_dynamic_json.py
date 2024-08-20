@@ -26,7 +26,7 @@ with DAG(
     description='movie_dynamic_json',
     schedule="@once",
     start_date=datetime(2015, 1, 1),
-    end_date=datetime(2015, 1, 1),
+    end_date=datetime(2015, 1, 2),
     catchup=True,
     tags=['movie', 'dynamic', 'json'],
 ) as dag:
@@ -34,10 +34,9 @@ with DAG(
     def get_data(ds_nodash):
         from movdata.movielist import save_movie_json
         year = str(ds_nodash)[:4]
-        total_pages = 10
         file_path = "/home/young12/data/json/movie.json"
 
-        save_movie_json(year, total_pages, file_path)  
+        save_movie_json(year, file_path)  
         return True
 
     # t1, t2 and t3 are examples of tasks created by instantiating operators
@@ -54,14 +53,14 @@ with DAG(
     pars_parq = BashOperator(
         task_id='parsing.parquet',
         bash_command="""
-            $SPARK_HOME/bin/spark-submit /home/young12/airflow/py/parsing_parquet.py {{ds_nodash[:4]}}
+            $SPARK_HOME/bin/spark-submit /home/young12/airflow/py/parsing_parquet.py {{execution_date.year}}
         """
     )
 
     sel_parq = BashOperator(
         task_id='select.parquet',
         bash_command="""
-            echo "select"
+            $SPARK_HOME/bin/spark-submit /home/young12/airflow/py/select_parquet.py {{execution_date.year}}
         """
     )
 
