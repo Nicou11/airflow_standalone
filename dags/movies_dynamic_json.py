@@ -28,11 +28,11 @@ with DAG(
     start_date=datetime(2015, 1, 1),
     end_date=datetime(2015, 1, 1),
     catchup=True,
-    tags=['dynamic', 'json'],
+    tags=['movie', 'dynamic', 'json'],
 ) as dag:
 
     def get_data(ds_nodash):
-        from movdata.movieList import save_movie_json
+        from movdata.movielist import save_movie_json
         year = str(ds_nodash)[:4]
         total_pages = 10
         file_path = "/home/young12/data/json/movie.json"
@@ -41,28 +41,28 @@ with DAG(
         return True
 
     # t1, t2 and t3 are examples of tasks created by instantiating operators
-    task_start = EmptyOperator(task_id='start')
-    task_end = EmptyOperator(task_id='end', trigger_rule="all_done")
+    start = EmptyOperator(task_id='start')
+    end = EmptyOperator(task_id='end', trigger_rule="all_done")
 
-    task_get_data = PythonVirtualenvOperator(
+    get_data = PythonVirtualenvOperator(
         task_id='get.data',
         python_callable=get_data,
         requirements=["git+https://github.com/Nicou11/movdata.git@0.2/movielist"],
         system_site_packages=False,
     )
 
-    task_pars_parq = BashOperator(
+    pars_parq = BashOperator(
         task_id='parsing.parquet',
         bash_command="""
-            echo "parsing"
+            $SPARK_HOME/bin/spark-submit /home/young12/airflow/py/parsing_parquet.py {{ds_nodash[:4]}}
         """
     )
 
-    task_sel_parq = BashOperator(
+    sel_parq = BashOperator(
         task_id='select.parquet',
         bash_command="""
             echo "select"
         """
     )
 
-    task_start >> task_get_data >> task_pars_parq >> task_sel_parq >> task_end
+    start >> get_data >> pars_parq >> sel_parq >> end
